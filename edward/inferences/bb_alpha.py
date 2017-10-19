@@ -84,7 +84,8 @@ class BB_alpha(VariationalInference):
       raise TypeError("kl_scaling must be None when using non-analytic KL term")
     if is_reparameterizable:
       if is_analytic_kl:
-        return build_reparam_bb_alpha_kl_loss_and_gradients(self, var_list, self.alpha)
+        #return build_reparam_bb_alpha_kl_loss_and_gradients(self, var_list, self.alpha)
+        return build_reparam_bb_alpha_loss_and_gradients(self, var_list, self.alpha)        
       else:
         return build_reparam_bb_alpha_loss_and_gradients(self, var_list, self.alpha)
     else:
