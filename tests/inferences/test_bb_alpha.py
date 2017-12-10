@@ -28,7 +28,7 @@ class test_bb_alpha_class(tf.test.TestCase):
 
       self.assertAllClose(qmu.mean().eval(), 0, rtol=0.15, atol=0.15)
       self.assertAllClose(qmu.stddev().eval(), np.sqrt(1 / 51),
-                          rtol=0.15, atol=0.15)
+                          rtol=1e-2, atol=1e-2)
 
       variables = tf.get_collection(
           tf.GraphKeys.GLOBAL_VARIABLES, scope='optimizer')
@@ -52,40 +52,15 @@ class test_bb_alpha_class(tf.test.TestCase):
       self.assertAllClose(p.eval(), 0.2, rtol=5e-2, atol=5e-2)
 
   def test_bb_alpha(self):
-    # normal-normal - special case - KLpq:
-    self._test_normal_normal(n_samples=5,
-                             n_iter=500,
-                             alpha=1.0)
-    
     # normal-normal - special case - KLqp:
-    self._test_normal_normal(n_samples=1,
+    self._test_normal_normal(n_samples=20,
                              n_iter=200,
-                             alpha=0.0)
-    
-    # normal-normal - case where alpha = 0.5:
-    self._test_normal_normal(n_samples=1,
-                             n_iter=200,
-                             alpha=0.5)
-    
-    # normal-normal - case where alpha > 0:
-    self._test_normal_normal(n_samples=1,
-                             n_iter=200,
-                             alpha=5.0)
-    
-    # normal-normal - case where alpha < 0:
-    self._test_normal_normal(n_samples=1,
-                             n_iter=200,
-                             alpha=-5.0)
-    
-    # model parameter - special case - KLpq:
-    self._test_model_parameter(n_samples=5,
-                               n_iter=100,
-                               alpha=1.0)
-    
+                             alpha=0.01)
+
     # model parameter - special case - KLqp:
     self._test_model_parameter(n_samples=5,
                                n_iter=100,
-                               alpha=0.0)
+                               alpha=0.01)
     # model parameter - case where alpha = 0.5:
     self._test_model_parameter(n_samples=5,
                                n_iter=100,

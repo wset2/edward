@@ -78,93 +78,12 @@ class BB_alpha(VariationalInference):
         rv.reparameterization_type ==
         tf.contrib.distributions.FULLY_REPARAMETERIZED
         for rv in six.itervalues(self.latent_vars)])
-    is_analytic_kl = all([isinstance(z, Normal) and isinstance(qz, Normal)
-                          for z, qz in six.iteritems(self.latent_vars)])
-    if not is_analytic_kl and self.kl_scaling:
-      raise TypeError("kl_scaling must be None when using non-analytic KL term")
     if is_reparameterizable:
-      if is_analytic_kl:
-        #return build_reparam_bb_alpha_kl_loss_and_gradients(self, var_list, self.alpha)
-        return build_reparam_bb_alpha_loss_and_gradients(self, var_list, self.alpha)        
-      else:
-        return build_reparam_bb_alpha_loss_and_gradients(self, var_list, self.alpha)
+      return build_reparam_bb_alpha_loss_and_gradients(self, var_list, self.alpha)
     else:
       raise NotImplementedError(
           "Black box alpha divergence inference only works with reparameterizable"
           " models.")
-
-
-def build_reparam_bb_alpha_kl_loss_and_gradients(inference, var_list, alpha):
-  """Build loss function. Its automatic differentiation
-  is a stochastic gradient of
-
-  $ -\\text{ELBO} =  - ( \mathbb{E}_{q(z; \lambda)} [ \log p(x \mid z) ]
-          + \\text{KL}(q(z; \lambda) \| p(z)) ) $
-
-  based on the reparameterization trick [@kingma2014auto].
-
-  It assumes the KL is analytic.
-
-  Computed by sampling from $q(z;\lambda)$ and evaluating the
-  expectation using Monte Carlo sampling.
-  """
-  p_log_lik = [0.0] * inference.n_samples
-  base_scope = tf.get_default_graph().unique_name("inference") + '/'
-  for s in range(inference.n_samples):
-    # Form dictionary in order to replace conditioning on prior or
-    # observed variable with conditioning on a specific value.
-    scope = base_scope + tf.get_default_graph().unique_name("sample")
-    dict_swap = {}
-    for x, qx in six.iteritems(inference.data):
-      if isinstance(x, RandomVariable):
-        if isinstance(qx, RandomVariable):
-          qx_copy = copy(qx, scope=scope)
-          dict_swap[x] = qx_copy.value()
-        else:
-          dict_swap[x] = qx
-
-    for z, qz in six.iteritems(inference.latent_vars):
-      # Copy q(z) to obtain new set of posterior samples.
-      qz_copy = copy(qz, scope=scope)
-      dict_swap[z] = qz_copy.value()
-
-    for x in six.iterkeys(inference.data):
-      if isinstance(x, RandomVariable):
-        x_copy = copy(x, dict_swap, scope=scope)
-        p_log_lik[s] += tf.reduce_sum(
-            inference.scale.get(x, 1.0) * x_copy.log_prob(dict_swap[x]))
-
-  kl_penalty = tf.reduce_sum([
-      tf.reduce_sum(inference.kl_scaling.get(z, 1.0) * kl_divergence(qz, z))
-      for z, qz in six.iteritems(inference.latent_vars)])
-
-  if np.abs(alpha - 0.0) < 10e-3:
-    p_log_lik = tf.reduce_mean(p_log_lik)
-    loss = p_log_lik - kl_penalty
-  
-  else:
-    p_log_lik = tf.stack(p_log_lik)
-    p_log_lik = p_log_lik * alpha
-    p_log_lik_max = tf.reduce_max(p_log_lik, 0)
-    p_log_lik = tf.log(
-        tf.maximum(1e-9,
-             tf.reduce_mean(tf.exp(p_log_lik - p_log_lik_max), 0)))
-    p_log_lik = (p_log_lik + p_log_lik_max) / alpha
-    p_log_lik = tf.reduce_mean(p_log_lik)
-    loss = p_log_lik - kl_penalty
-    
-  
-  if inference.logging:
-    tf.summary.scalar("loss/p_log_lik", p_log_lik,
-                      collections=[inference._summary_key])
-    tf.summary.scalar("loss/kl_penalty", kl_penalty,
-                      collections=[inference._summary_key])
-
-  loss = -loss
-
-  grads = tf.gradients(loss, var_list)
-  grads_and_vars = list(zip(grads, var_list))
-  return loss, grads_and_vars
 
 def build_reparam_bb_alpha_loss_and_gradients(inference, var_list, alpha):
   """Build loss function. Its automatic differentiation
@@ -181,6 +100,9 @@ def build_reparam_bb_alpha_loss_and_gradients(inference, var_list, alpha):
   p_log_prob = [0.0] * inference.n_samples
   q_log_prob = [0.0] * inference.n_samples
   p_log_lik = [0.0] * inference.n_samples
+  p_log_prior = [0.0] * inference.n_samples
+  beta = alpha / inference.n_samples
+    
   base_scope = tf.get_default_graph().unique_name("inference") + '/'
   for s in range(inference.n_samples):
     # Form dictionary in order to replace conditioning on prior or
@@ -218,12 +140,13 @@ def build_reparam_bb_alpha_loss_and_gradients(inference, var_list, alpha):
         x_copy = copy(x, dict_swap, scope=scope)
         p_log_lik[s] += tf.reduce_sum(
             inference.scale.get(x, 1.0) * x_copy.log_prob(dict_swap[x]))
-
+        
+  p_log_prior = [p1 - p2 for p1, p2 in zip(p_log_prob, p_log_lik)]
   p_log_prob = tf.reduce_mean(p_log_prob)
+  p_log_prior = tf.reduce_mean(p_log_prior)
   q_log_prob = tf.reduce_mean(q_log_prob)
 
-  if np.abs(alpha - 0.0) < 10e-3:
-    p_log_lik = tf.reduce_mean(p_log_lik)
+  if np.abs(alpha - 0.0) < 10e-4:
     loss = p_log_prob - q_log_prob
     
   else:
@@ -233,9 +156,12 @@ def build_reparam_bb_alpha_loss_and_gradients(inference, var_list, alpha):
     p_log_lik = tf.log(
         tf.maximum(1e-9,
              tf.reduce_mean(tf.exp(p_log_lik - p_log_lik_max), 0)))
-    p_log_lik = (p_log_lik + p_log_lik_max) / alpha
-    p_log_lik = tf.reduce_mean(p_log_lik)
-    loss = p_log_prob - q_log_prob + p_log_lik
+    p_log_lik = (p_log_lik + p_log_lik_max)
+    p_log_lik = tf.reduce_sum(p_log_lik) / alpha  
+    
+    loss = - q_log_prob + p_log_prior + p_log_lik
+   
+  loss = -loss
     
   if inference.logging:
     tf.summary.scalar("loss/p_log_prob", p_log_prob,
@@ -243,8 +169,7 @@ def build_reparam_bb_alpha_loss_and_gradients(inference, var_list, alpha):
     tf.summary.scalar("loss/q_log_prob", q_log_prob,
                       collections=[inference._summary_key])
 
-  loss = -loss
-
+  
   grads = tf.gradients(loss, var_list)
   grads_and_vars = list(zip(grads, var_list))
   return loss, grads_and_vars
